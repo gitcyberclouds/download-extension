@@ -478,25 +478,70 @@
     return clone;
   }
 
-  // Opens accordions / collapsibles so their text is captured. Restricted to
-  // disclosure widgets; menus, comboboxes and other controls are left alone.
+  // Opens every <details>. Button accordions are handled by openAccordions,
+  // which captures each item while it is open.
   async function expandInPageSections(main, maxPasses = 6) {
     for (let pass = 0; pass < maxPasses; pass++) {
-      const triggers = [...main.querySelectorAll('[aria-expanded="false"]')].filter((el) => {
-        if (el.getAttribute('aria-haspopup') || el.getAttribute('role') === 'combobox') return false;
-        if (el.tagName !== 'BUTTON' && el.getAttribute('role') !== 'button') return false;
-        return el.getAttribute('data-state') === 'closed' || el.hasAttribute('aria-controls');
-      });
       const details = [...main.querySelectorAll('details:not([open])')];
-      if (!triggers.length && !details.length) break;
-
-      for (const trigger of triggers) {
-        trigger.click();
-        await sleep(60);
-      }
+      if (!details.length) break;
       for (const node of details) node.open = true;
       await sleep(200);
     }
+  }
+
+  // Accordion items: buttons with aria-expanded="false" (menus, comboboxes and
+  // dialog triggers excluded). Single-open accordions close one item when the
+  // next opens, so each item is cloned right after it opens and the clone
+  // later replaces the collapsed item in the export.
+  const ACCORDION_TRIGGER = 'button[aria-expanded="false"], [role="button"][aria-expanded="false"]';
+  let openedTriggers = new WeakSet();
+  let accordionCount = 0;
+
+  function isAccordionTrigger(el) {
+    return !el.getAttribute('aria-haspopup') && el.getAttribute('role') !== 'combobox' && !el.disabled
+      && !openedTriggers.has(el) && !el.closest('[data-md-popup]');
+  }
+
+  async function openAccordions(root, depth) {
+    const captures = new Map();
+    for (let pass = 0; pass < 4; pass++) {
+      const triggers = [...root.querySelectorAll(ACCORDION_TRIGGER)].filter(isAccordionTrigger);
+      if (!triggers.length) break;
+
+      for (const trigger of triggers) {
+        openedTriggers.add(trigger);
+        if (!trigger.isConnected || trigger.getAttribute('aria-expanded') !== 'false') continue;
+        const chain = [];
+        for (let el = trigger.parentElement; el && root.contains(el) && chain.length < 6; el = el.parentElement) {
+          chain.push({ el, length: visibleText(el).length });
+          if (el === root) break;
+        }
+        const grown = () => chain.find((c) => c.el.isConnected && visibleText(c.el).length > c.length + 20);
+        trigger.click();
+        const reacted = await waitFor(() => grown() || trigger.getAttribute('aria-expanded') === 'true', { timeout: 1500, interval: 60 });
+        if (reacted && !grown()) await waitFor(grown, { timeout: 800, interval: 60 });
+        const item = grown()?.el;
+        if (!item) continue;
+        await settle(item, { quiet: 200, timeout: 2000 });
+        if (item === root) continue; // revealed in place; cloned with root
+
+        const key = `${depth}.${++accordionCount}`;
+        item.setAttribute('data-md-acc', key);
+        trigger.setAttribute('data-md-trigger', key);
+        const clone = await richClone(item, depth + 1);
+        trigger.removeAttribute('data-md-trigger');
+        // The item's button becomes its bold title.
+        const head = clone.querySelector(`[data-md-trigger="${key}"]`);
+        if (head) {
+          const title = document.createElement('p');
+          title.innerHTML = '<strong></strong>';
+          title.firstChild.textContent = controlLabel(trigger);
+          head.replaceWith(title);
+        }
+        captures.set(key, { id: item.id, clone });
+      }
+    }
+    return captures;
   }
 
   /* --------------------- popups and multi-view widgets --------------------- */
@@ -607,13 +652,19 @@
       const group = current.closest(GROUP_LIKE);
       if (group && scope.contains(group)) groups.add(group);
     }
+    // A <select> that swaps the content next to it ("Related example").
+    for (const select of scope.querySelectorAll('select:not([multiple])')) {
+      if (!select.disabled && select.options.length > 1) groups.add(select);
+    }
 
     const widgets = [];
     for (const group of groups) {
-      const controls = [...group.querySelectorAll(group.matches('[role="tablist"]') ? '[role="tab"]' : 'button, [role="button"]')]
-        .filter((c) => !c.closest('[aria-hidden="true"]'));
+      const controls = group.tagName === 'SELECT'
+        ? [...group.options].filter((o) => !o.disabled)
+        : [...group.querySelectorAll(group.matches('[role="tablist"]') ? '[role="tab"]' : 'button, [role="button"]')]
+          .filter((c) => !c.closest('[aria-hidden="true"]'));
       if (controls.length < 2) continue;
-      const groupText = visibleText(group).length;
+      const groupText = group.tagName === 'SELECT' ? 0 : visibleText(group).length;
       let element = group.parentElement;
       while (element && element !== scope && visibleText(element).length - groupText < 40) element = element.parentElement;
       if (!element || element === scope && visibleText(element).length - groupText < 40) continue;
@@ -624,9 +675,20 @@
       .filter((w, i, all) => all.findIndex((o) => o.element === w.element) === i);
   }
 
-  const GROUP_LIKE = '[role="tablist"], ol, ul, [role="group"], [role="list"], [role="radiogroup"], nav';
+  const GROUP_LIKE = '[role="tablist"], ol, ul, [role="group"], [role="list"], [role="radiogroup"], nav, select';
+
+  // Selects an option the way a user would, so React's onChange fires.
+  function activate(control) {
+    if (control.tagName !== 'OPTION') return control.click();
+    const select = control.closest('select');
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(select), 'value')?.set;
+    if (setter) setter.call(select, control.value);
+    else select.value = control.value;
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  }
   const signature = (el) => `${visibleText(el)}|${[...el.querySelectorAll('img[src], video[src], source[src]')].map((m) => m.getAttribute('src')).join(',')}`;
-  const isActive = (c) => ['true', 'step', 'page', 'location'].includes(c.getAttribute('aria-current')) || c.getAttribute('aria-selected') === 'true' || c.getAttribute('data-state') === 'active';
+  const isActive = (c) => c.selected || ['true', 'step', 'page', 'location'].includes(c.getAttribute('aria-current')) || c.getAttribute('aria-selected') === 'true' || c.getAttribute('data-state') === 'active';
 
   // Clicks through every view of a widget. Returns the indices of the
   // widget's children that change between views (the panel) and, per view,
@@ -642,9 +704,9 @@
     for (const control of controls) {
       if (!control.isConnected || !element.isConnected) break;
       if (control.disabled || control.getAttribute('aria-disabled') === 'true') continue;
-      const label = controlLabel(control);
+      const label = control.tagName === 'OPTION' ? clean(control.textContent) : controlLabel(control);
       const before = kids().map(signature).join('\n');
-      control.click();
+      activate(control);
       await waitFor(() => kids().map(signature).join('\n') !== before, { timeout: 1200, interval: 60 });
       await settle(element, { quiet: 200, timeout: 2000 });
       const now = kids();
@@ -652,20 +714,40 @@
         if (signature(kid) !== base[i] && !kid.contains(widget.group)) changed.add(i);
       });
       const parts = [];
-      for (const [i, kid] of now.entries()) if (!kid.contains(widget.group)) parts[i] = await expandedClone(kid, depth + 1);
+      for (const [i, kid] of now.entries()) if (!kid.contains(widget.group)) parts[i] = await richClone(kid, depth + 1);
       views.push({ label, parts });
     }
 
     if (controls[start]?.isConnected) {
-      controls[start].click();
+      activate(controls[start]);
       await settle(element, { quiet: 200, timeout: 1500 });
     }
     return { changed: [...changed].sort((a, b) => a - b), views };
   }
 
+  let widgetsEnabled = true;
+
+  // The export of `root`: accordion items captured while open, then every
+  // tab / step / option view of the widgets in it.
+  async function richClone(root, depth = 0) {
+    const accordions = depth < 4 ? await openAccordions(root, depth) : new Map();
+    const clone = await expandedClone(root, depth);
+    for (const [key, { id, clone: item }] of accordions) {
+      item.removeAttribute('data-md-acc');
+      const target = clone.querySelector(`[data-md-acc="${key}"]`) || (id && clone.querySelector(`[id="${id.replace(/["\\]/g, '\\$&')}"]`));
+      if (target) target.replaceWith(item);
+      else clone.append(item);
+      root.querySelector(`[data-md-acc="${key}"]`)?.removeAttribute('data-md-acc');
+    }
+    return clone;
+  }
+
   // cloneVisible, plus every widget inside `root` written out view by view.
   async function expandedClone(root, depth = 0) {
-    const widgets = depth < 3 ? findWidgets(root) : [];
+    const widgets = !widgetsEnabled || depth >= 3 ? [] : findWidgets(root).filter((w) => {
+      const owner = w.element.closest('[data-md-acc]');
+      return !owner || owner === root || !root.contains(owner);
+    });
     const results = [];
     for (const widget of widgets) {
       const result = await captureWidget(widget, depth);
@@ -813,7 +895,9 @@
     const popups = options.openPopups === false ? new Map() : await openPopups(main);
     const live = document.querySelector('main') || document.body; // a routed popup may re-render it
     if (popups.size) await expandInPageSections(live);
-    const clone = options.expandWidgets === false ? cloneVisible(live) : await expandedClone(live);
+    openedTriggers = new WeakSet();
+    widgetsEnabled = options.expandWidgets !== false;
+    const clone = await richClone(live);
     splicePopups(clone, popups);
     for (const el of live.querySelectorAll('[data-md-popup]')) el.removeAttribute('data-md-popup');
     const pager = extractPager(clone);
@@ -1118,7 +1202,7 @@
   // Exposed for the offline test harness in test/.
   globalThis.__buckeyeInternals = {
     collectSidebarPages, discoverSidebar, mergePages, planAll, planFile, pageTags, extractCurrentPage, cleanClone,
-    cloneVisible, expandedClone, findWidgets, openPopups, extractPager, writeIndexes, mergeDiscovered, isSkipped, siteName, exportCurrentPage,
+    cloneVisible, expandedClone, richClone, findWidgets, openPopups, extractPager, writeIndexes, mergeDiscovered, isSkipped, siteName, exportCurrentPage,
   };
 
   // Resume automatically after a full page load mid-crawl.

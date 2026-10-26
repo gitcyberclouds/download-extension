@@ -3,9 +3,13 @@
 // static, so the controls are wired here to re-render like the live hub;
 // the export must contain every view and the dialog text, in page order.
 import assert from 'node:assert/strict';
-import { createDom, createSandbox, loadScripts, fakeChrome } from './fixture.mjs';
+import { createDom, createSandbox, loadScripts, fakeChrome, hasFixture } from './fixture.mjs';
 
-const { dom, fixture } = createDom();
+if (!hasFixture('/overview')) {
+  console.log('no snapshot of /overview; skipping.');
+  process.exit(0);
+}
+const { dom, fixture } = createDom({ page: '/overview' });
 const { window } = dom;
 const { document } = window;
 const { chrome } = fakeChrome();

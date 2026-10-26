@@ -24,15 +24,27 @@ function decodeQuotedPrintable(body) {
 }
 
 // FIXTURE=/path/to/page.mhtml picks a specific snapshot; otherwise the known
-// names are tried, then any .mhtml in the repository root.
-function fixtureFiles(root) {
-  if (process.env.FIXTURE) return [path.resolve(process.env.FIXTURE)];
-  const others = fs.readdirSync(root).filter((n) => n.endsWith('.mhtml') && !CANDIDATES.includes(n)).sort();
-  return [...CANDIDATES, ...others].map((name) => path.join(root, name));
+// names are tried, then any .mhtml in the repository root. `page` limits the
+// choice to snapshots of that path (e.g. '/common-mistakes').
+function snapshotPath(file) {
+  const head = fs.readFileSync(file, 'latin1').slice(0, 2000);
+  const url = /Snapshot-Content-Location:\s*(\S+)/.exec(head)?.[1];
+  return url ? new URL(url).pathname.replace(/\/+$/, '') : null;
 }
 
-export function loadFixture(root = path.resolve('../..')) {
-  for (const file of fixtureFiles(root)) {
+function fixtureFiles(root, page) {
+  if (process.env.FIXTURE) return [path.resolve(process.env.FIXTURE)];
+  const others = fs.readdirSync(root).filter((n) => n.endsWith('.mhtml') && !CANDIDATES.includes(n)).sort();
+  const files = [...CANDIDATES, ...others].map((name) => path.join(root, name)).filter((f) => fs.existsSync(f));
+  return page ? files.filter((f) => f.endsWith('.mhtml') && snapshotPath(f) === page) : files;
+}
+
+export function hasFixture(page, root = path.resolve('../..')) {
+  return fixtureFiles(root, page).length > 0;
+}
+
+export function loadFixture(root = path.resolve('../..'), page = null) {
+  for (const file of fixtureFiles(root, page)) {
     const name = path.basename(file);
     if (!fs.existsSync(file)) continue;
 
@@ -59,8 +71,8 @@ export function loadFixture(root = path.resolve('../..')) {
   throw new Error(`No fixture found in ${root} (expected one of: ${CANDIDATES.join(', ')}, any .mhtml, or FIXTURE=path)`);
 }
 
-export function createDom() {
-  const fixture = loadFixture();
+export function createDom({ page = null } = {}) {
+  const fixture = loadFixture(path.resolve('../..'), page);
   // jsdom cannot navigate; its notice about that is noise for these tests.
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('error', (e) => console.error(e));
@@ -91,6 +103,7 @@ export function createSandbox(window, extra = {}) {
     MouseEvent: window.MouseEvent,
     KeyboardEvent: window.KeyboardEvent,
     NodeFilter: window.NodeFilter,
+    Event: window.Event,
     PopStateEvent: window.PopStateEvent,
     history: window.history,
     getComputedStyle: window.getComputedStyle.bind(window),

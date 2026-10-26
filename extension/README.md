@@ -97,7 +97,12 @@ so the names stay readable. Links between exported pages are rewritten to relati
 
 Before a page is converted, everything it hides behind a click is opened:
 
-- **Accordions** (`<details>`, `aria-expanded` disclosures) are expanded.
+- **Accordions** — `<details>` are opened; every collapsed `aria-expanded="false"` button in the
+  page body (menus, comboboxes and dialog triggers excluded) is clicked one at a time, and the item
+  that grows is captured right then, with anything nested inside it opened too. Each capture
+  replaces its collapsed item in the export, so single-open accordions (opening one closes the
+  rest, like the 12 error patterns on *Common errors & feedback*) still yield every panel. The
+  item's button becomes its bold title.
 - **“Read announcement”** (also “Read more”, “Read full post”, “View announcement”…) buttons are
   clicked one by one. A dialog that opens is captured and closed again, text that expands in place
   is kept, and a button that routes to another URL is captured and followed by *Back*. The
@@ -106,8 +111,9 @@ Before a page is converted, everything it hides behind a click is opened:
   one carries `aria-current` (e.g. *1. Content Quality … 7. Overall, Recap*, or slide dots
   *A1…A6*) — are clicked through view by view. The parts of the widget that change are written
   out for every view, labelled with the control's name unless the view already starts with it;
-  widgets nested in a view (slides inside a deck tab) are expanded too. The original view is
-  re-selected afterwards.
+  widgets nested in a view (slides inside a deck tab) are expanded too. A `<select>` that swaps
+  the content next to it (*Related example*) is treated the same way, one option at a time. The
+  original view is re-selected afterwards.
 
 Only the page content is exported: the hero/heading block, body text, lists, tables, code, media
 references and in-page accordions. Navigation (sidebar, Previous/Next pager), tooltips, toasts and
@@ -137,7 +143,7 @@ fails, each file is downloaded individually so an export is never lost.
 The converter and export pipeline can be exercised offline against a saved copy of a hub page —
 either a Chrome "Webpage, Single File" `.mhtml` snapshot or a plain `.html` save placed in the
 repository root (`Project Violet Instructions.mhtml`, `Project Buckeye — Fellow Instructions.html`,
-or any other `.mhtml`; `FIXTURE=/path/to/page.mhtml` picks one explicitly). Snapshots are
+or any other `.mhtml`; `FIXTURE=/path/to/page.mhtml` picks one explicitly; `widgets.test.mjs` and `accordion.test.mjs` look for snapshots of `/overview` and `/common-mistakes` and skip without them). Snapshots are
 git-ignored because they hold hub content.
 
 ```bash
@@ -147,6 +153,7 @@ node converter.test.mjs   # sidebar parsing + converter unit cases + full page
 node export.test.mjs      # file plan (tag folders, numbered variant) + full document
 node sidebar.test.mjs     # collapsible sections expanded into nested folders (asserts)
 node widgets.test.mjs     # stepper, tabs, slide dots and announcement dialog captured (asserts)
+node accordion.test.mjs   # single-open accordion + "Related example" selects (asserts)
 node zip.test.mjs         # writes out.zip
 node package.test.mjs     # whole pipeline -> package.zip
 ```
