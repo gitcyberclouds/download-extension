@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>Learning Hub Exporter</title>
+  </head>
+  <body>
+    <header>
+      <h1>Learning Hub Exporter</h1>
+      <p id="site" class="muted">Checking tab…</p>
+    </header>
+
+    <section class="options">
+      <label class="row">
+        <span>Archive / root folder name (blank = site title)</span>
+        <input id="folder" type="text" value="" placeholder="e.g. Project Violet Instructions" spellcheck="false" />
+      </label>
+      <label class="row">
+        <span>Delay between pages (ms)</span>
+        <input id="delay" type="number" min="0" step="100" value="400" />
+      </label>
+      <label class="row">
+        <span>Skip sidebar sections or pages (comma separated)</span>
+        <input id="skip" type="text" value="Support" spellcheck="false" />
+      </label>
+      <label class="check"><input id="zip" type="checkbox" checked /> <span>Save everything as one <code>.zip</code></span></label>
+      <label class="check"><input id="numbered" type="checkbox" /> <span>Prefix folders and files with sidebar order (<code>01</code>, <code>02</code>…)</span></label>
+      <label class="check"><input id="frontmatter" type="checkbox" /> <span>Add a metadata header (front matter) to each file</span></label>
+      <label class="check"><input id="index" type="checkbox" /> <span>Also write <code>README.md</code>, <code>_index.json</code>, <code>_tags/</code> and <code>ALL-PAGES.md</code></span></label>
+      <label class="check"><input id="pager" type="checkbox" checked /> <span>Follow Previous/Next to find pages missing from the sidebar</span></label>
+      <label class="check"><input id="media" type="checkbox" /> <span>Download images and videos too</span></label>
+    </section>
+
+    <div class="actions">
+      <button id="start" class="primary">Export all pages</button>
+      <button id="stop" class="ghost" disabled>Stop</button>
+      <button id="single" class="ghost">This page only</button>
+    </div>
+
+    <div class="progress">
+      <div class="bar"><div id="fill"></div></div>
+      <p id="status" class="muted">Idle</p>
+    </div>
+
+    <pre id="log" aria-live="polite"></pre>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

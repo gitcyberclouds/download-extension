@@ -1,0 +1,8 @@
+node_modules/
+package-lock.json
+# test outputs
+extension/test/out.zip
+extension/test/package.zip
+# saved hub pages used as offline test fixtures (private content)
+*.mhtml
+Project Buckeye*.html
