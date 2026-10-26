@@ -9,8 +9,13 @@
 
   const SIDEBAR = '[data-sidebar="content"]';
   const GROUP = '[data-sidebar="group"]';
-  const MENU_LINK = 'a[data-sidebar="menu-button"][href]';
-  const MENU_ITEM = 'li[data-sidebar="menu-item"]';
+  // Sidebar entries are links (<a href>) or, for collapsible parents such as
+  // "Tasking Guide", buttons that carry the page path in data-tour-path and
+  // only render their children once expanded.
+  const MENU_HEAD = '[data-sidebar="menu-button"], [data-sidebar="menu-sub-button"]';
+  const MENU_LINK = 'a[data-sidebar="menu-button"][href], a[data-sidebar="menu-sub-button"][href]';
+  const MENU_ITEM = 'li';
+  const TOUR_ATTRS = ['data-tour-path', 'data-path', 'data-href'];
   const MAX_ATTEMPTS = 3;
   const UNLISTED = '_unlisted';
 
@@ -44,10 +49,29 @@
 
   /* --------------------------- sidebar discovery -------------------------- */
 
-  function linkTitle(anchor) {
-    const label = anchor.querySelector('span.flex-1') || anchor.querySelector('span');
-    return clean(label?.textContent || anchor.textContent);
+  function linkTitle(head) {
+    const label = head.querySelector('span.flex-1') || head.querySelector('span');
+    return clean(label?.textContent || head.textContent);
   }
+
+  function headPath(head) {
+    if (head.tagName === 'A') return pathOf(head.getAttribute('href'));
+    for (const attr of TOUR_ATTRS) {
+      const value = head.getAttribute(attr);
+      if (value) return pathOf(value);
+    }
+    return null;
+  }
+
+  // The menu button that labels a list item (not one of its descendants').
+  function itemHead(item) {
+    for (const head of item.querySelectorAll(MENU_HEAD)) {
+      if (head.closest(MENU_ITEM) === item) return head;
+    }
+    return null;
+  }
+
+  const isCollapsible = (head) => head.tagName !== 'A' && head.hasAttribute('aria-expanded');
 
   // Group headings are sometimes buttons (collapsible groups) and sometimes a
   // plain uppercase <div>; the first group may have no heading at all.
@@ -55,11 +79,20 @@
     const button = group.querySelector('[data-sidebar="group-label"]');
     if (button) return clean(button.textContent);
     for (const child of group.children) {
-      if (child.matches('[data-sidebar="group-content"]') || child.querySelector(MENU_LINK)) continue;
+      if (child.matches('[data-sidebar="group-content"]') || child.querySelector(MENU_HEAD)) continue;
       const text = clean(child.textContent);
       if (text) return text;
     }
     return 'General';
+  }
+
+  // A section heading inside a menu: a text-only block outside any list item,
+  // e.g. <div class="uppercase">Fellow Guide</div>.
+  function isSectionLabel(el) {
+    if (el.matches('[data-sidebar="group-label"]')) return true;
+    if (el.closest(MENU_ITEM) || el.matches(MENU_HEAD) || el.querySelector(`${MENU_ITEM}, ${MENU_HEAD}, input, button`)) return false;
+    if (!clean(el.textContent)) return false;
+    return ![...el.children].some((child) => clean(child.textContent));
   }
 
   function collectSidebarPages() {
@@ -67,51 +100,124 @@
     if (!root) return [];
 
     let groups = [...root.querySelectorAll(GROUP)].filter((g) => !g.parentElement.closest(GROUP));
-    if (!groups.length) groups = [...root.children];
+    if (!groups.length) groups = [root];
 
     const pages = [];
     const seen = new Set();
+    let sectionOrder = 0;
 
-    groups.forEach((group, index) => {
-      const section = groupLabel(group);
+    for (const group of groups) {
+      let section = groupLabel(group);
+      let counted = false;
 
-      for (const anchor of group.querySelectorAll(MENU_LINK)) {
-        const path = pathOf(anchor.getAttribute('href'));
+      for (const el of group.querySelectorAll('*')) {
+        if (isSectionLabel(el)) {
+          const label = clean(el.textContent);
+          if (label !== section || !counted) {
+            section = label;
+            sectionOrder++;
+            counted = true;
+          }
+          continue;
+        }
+        if (!el.matches(MENU_HEAD)) continue;
+
+        const path = headPath(el);
         if (!path || seen.has(path)) continue;
         seen.add(path);
+        if (!counted) {
+          sectionOrder++;
+          counted = true;
+        }
 
-        const item = anchor.closest(MENU_ITEM);
+        const item = el.closest(MENU_ITEM);
         const ancestors = [];
         let above = item?.parentElement?.closest(MENU_ITEM);
-        while (above) {
-          const link = above.querySelector(MENU_LINK);
-          if (link) ancestors.unshift({ title: linkTitle(link), path: pathOf(link.getAttribute('href')) });
+        while (above && root.contains(above)) {
+          const head = itemHead(above);
+          if (head) ancestors.unshift({ title: linkTitle(head), path: headPath(head) });
           above = above.parentElement?.closest(MENU_ITEM);
         }
 
-        // Collapsed parents show a chevron and hide their children; expanded
-        // ones have nested menu items.
-        const hasNested = !!item?.querySelector(MENU_ITEM);
-        const hasChevron = !!anchor.querySelector('svg[class*="chevron"]');
+        // Collapsed parents show a chevron or aria-expanded and hide their
+        // children; expanded ones have nested items.
+        const hasNested = !!item && [...item.querySelectorAll(MENU_HEAD)].some((h) => h !== el);
+        const hasChevron = !!el.querySelector('svg[class*="chevron"]');
 
         pages.push({
           path,
-          title: linkTitle(anchor) || path,
+          title: linkTitle(el) || path,
           section,
-          sectionOrder: index + 1,
-          depth: ancestors.length,
-          parent: ancestors.length ? ancestors[ancestors.length - 1].title : null,
-          parentPath: ancestors.length ? ancestors[ancestors.length - 1].path : null,
-          ancestors: ancestors.map((a) => a.title),
-          ancestorPaths: ancestors.map((a) => a.path),
-          isParent: hasNested || hasChevron,
-          read: !!anchor.querySelector('svg[aria-label="Read"]'),
+          sectionOrder,
+          ancestors,
+          isParent: hasNested || hasChevron || isCollapsible(el),
+          collapsible: isCollapsible(el),
+          read: !!el.querySelector('svg[aria-label="Read"]'),
           origin: 'sidebar',
         });
       }
-    });
+    }
 
-    return pages;
+    // Children rendered outside their parent's <li> are nested by URL:
+    // /getting-help/slack belongs under the collapsible "Getting help".
+    const parents = pages.filter((p) => p.collapsible);
+    for (const page of pages) {
+      if (page.ancestors.length) continue;
+      let best = null;
+      for (const parent of parents) {
+        if (parent !== page && page.path.startsWith(`${parent.path}/`) && (!best || parent.path.length > best.path.length)) best = parent;
+      }
+      if (best && !best.ancestors.some((a) => a.path === page.path)) {
+        page.ancestors = [...best.ancestors, { title: best.title, path: best.path }];
+      }
+    }
+
+    return pages.map(({ ancestors, collapsible, ...page }) => ({
+      ...page,
+      depth: ancestors.length,
+      parent: ancestors.length ? ancestors[ancestors.length - 1].title : null,
+      parentPath: ancestors.length ? ancestors[ancestors.length - 1].path : null,
+      ancestors: ancestors.map((a) => a.title),
+      ancestorPaths: ancestors.map((a) => a.path),
+    }));
+  }
+
+  // Adds pages from `found` that `list` lacks, each right after the nearest
+  // earlier page of `found` that `list` already has (so children land after
+  // their parent). Updates parent flags/ancestry of pages not yet exported.
+  // Returns the number of pages added.
+  function mergePages(list, found, minIndex = 0) {
+    const known = new Map(list.map((p) => [p.path, p]));
+    let added = 0;
+    found.forEach((page, i) => {
+      const existing = known.get(page.path);
+      if (existing) {
+        if (!existing.done) {
+          if (page.isParent) existing.isParent = true;
+          if (page.depth > (existing.depth || 0) && existing.origin !== 'pager') {
+            Object.assign(existing, {
+              depth: page.depth, parent: page.parent, parentPath: page.parentPath,
+              ancestors: page.ancestors, ancestorPaths: page.ancestorPaths,
+            });
+          }
+        }
+        return;
+      }
+      let insertAt = list.length;
+      for (let j = i - 1; j >= 0; j--) {
+        const idx = list.findIndex((p) => p.path === found[j].path);
+        if (idx >= 0) {
+          insertAt = idx + 1;
+          while (insertAt < list.length && (list[insertAt].ancestorPaths || []).includes(found[j].path)) insertAt++;
+          break;
+        }
+      }
+      if (insertAt < minIndex) insertAt = minIndex;
+      list.splice(insertAt, 0, page);
+      known.set(page.path, page);
+      added++;
+    });
+    return added;
   }
 
   function skipList(options) {
@@ -128,12 +234,39 @@
     return names.some((name) => skip.includes(name));
   }
 
-  // Tries to reveal collapsed parents. Collapsible group headers get clicked;
-  // chevrons inside menu links get a synthetic click (this may navigate to the
-  // parent page, which is fine — the crawl navigates anyway).
-  async function expandSidebar(maxPasses = 6) {
+  const headCount = (item) => (item ? item.querySelectorAll(MENU_HEAD).length : 0);
+  const TOGGLE = `${MENU_ITEM} button[aria-expanded="false"], ${MENU_ITEM} button[aria-label^="Expand"]`;
+
+  // Expands every collapsed parent and returns the union of the pages seen
+  // along the way. The sidebar is re-read after each click because some
+  // accordions close one group when another opens; for the same reason nested
+  // collapsibles are opened right after their parent, before moving on.
+  // Clicking a chevron inside a link may navigate to that page, which is
+  // fine — the crawl navigates anyway.
+  async function discoverSidebar(maxPasses = 6) {
     const root = document.querySelector(SIDEBAR);
-    if (!root) return false;
+    const pages = collectSidebarPages();
+    if (!root) return pages;
+    const tried = new Set();
+    const absorb = () => mergePages(pages, collectSidebarPages());
+
+    async function expand(button, levels) {
+      const key = headPath(button) || linkTitle(button);
+      if (tried.has(key) || !button.isConnected || button.getAttribute('aria-haspopup')) return 0;
+      tried.add(key);
+      const item = button.closest(MENU_ITEM);
+      const scope = item.parentElement || item;
+      const before = headCount(scope);
+      button.click();
+      await waitFor(() => button.getAttribute('aria-expanded') === 'true' && headCount(scope) > before, { timeout: 1500, interval: 60 });
+      await sleep(80);
+      absorb();
+      let clicks = 1;
+      if (levels > 0) {
+        for (const inner of item.querySelectorAll(TOGGLE)) if (inner !== button) clicks += await expand(inner, levels - 1);
+      }
+      return clicks;
+    }
 
     for (let pass = 0; pass < maxPasses; pass++) {
       let clicks = 0;
@@ -143,28 +276,29 @@
         clicks++;
         await sleep(70);
       }
+      absorb();
 
-      for (const button of root.querySelectorAll(`${MENU_ITEM} button[aria-expanded="false"], ${MENU_ITEM} button[aria-label^="Expand"]`)) {
-        if (button.getAttribute('aria-haspopup')) continue;
-        button.click();
-        clicks++;
-        await sleep(70);
-      }
+      for (const button of [...root.querySelectorAll(TOGGLE)]) clicks += await expand(button, 5);
 
       for (const chevron of root.querySelectorAll(`${MENU_LINK} svg[class*="chevron"]`)) {
         const item = chevron.closest(MENU_ITEM);
-        if (!item || !item.isConnected || item.querySelector(MENU_ITEM)) continue;
+        if (!item || !item.isConnected || headCount(item) > 1) continue;
+        const key = pathOf(chevron.closest('a').getAttribute('href'));
+        if (tried.has(key)) continue;
+        tried.add(key);
         const before = location.href;
         chevron.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
         clicks++;
         await sleep(150);
         if (location.href !== before) await sleep(700);
+        absorb();
       }
 
       if (!clicks) break;
       await sleep(250);
+      absorb();
     }
-    return true;
+    return pages;
   }
 
   /* ------------------------------ file plan ------------------------------- */
@@ -219,33 +353,44 @@
 
   // Sidebar re-scan after arriving on a page: collapsed groups usually open
   // when their page is active, which is when hidden children first appear.
-  function mergeDiscovered(state) {
+  // Read-only — clicking a collapsible here could navigate away from the page
+  // about to be extracted. On a parent page, in-content links below the
+  // parent's path are children too (covers hubs whose sidebar never lists them).
+  async function mergeDiscovered(state, page = null) {
     const found = collectSidebarPages().filter((p) => !isSkipped(p, state.options));
-    const known = new Map(state.queue.map((p) => [p.path, p]));
-    let added = 0;
-
-    found.forEach((page, i) => {
-      const existing = known.get(page.path);
-      if (existing) {
-        if (page.isParent && !existing.isParent && !existing.done) existing.isParent = true;
-        return;
-      }
-      let insertAt = state.queue.length;
-      for (let j = i - 1; j >= 0; j--) {
-        const idx = state.queue.findIndex((p) => p.path === found[j].path);
-        if (idx >= 0) {
-          insertAt = idx + 1;
-          break;
-        }
-      }
-      if (insertAt <= state.index) insertAt = state.index + 1;
-      state.queue.splice(insertAt, 0, page);
-      known.set(page.path, page);
-      added++;
-    });
-
+    if (page?.isParent && page.origin !== 'pager') found.push(...childLinksInContent(page, found, state));
+    const added = mergePages(state.queue, found, state.index + 1);
     planAll(state);
     return added;
+  }
+
+  function childLinksInContent(page, found, state) {
+    const main = document.querySelector('main');
+    if (!main) return [];
+    const known = new Set([...state.queue, ...found].map((p) => p.path));
+    const children = [];
+    for (const anchor of main.querySelectorAll('a[href]')) {
+      const path = pathOf(anchor.getAttribute('href'));
+      if (!path || known.has(path) || !path.startsWith(`${page.path}/`)) continue;
+      known.add(path);
+      const child = {
+        path,
+        title: clean(anchor.textContent) || path.split('/').pop(),
+        section: page.section,
+        sectionOrder: page.sectionOrder,
+        depth: (page.depth || 0) + 1,
+        parent: page.title,
+        parentPath: page.path,
+        ancestors: [...(page.ancestors || []), page.title],
+        ancestorPaths: [...(page.ancestorPaths || []), page.path],
+        isParent: false,
+        read: false,
+        origin: 'content',
+      };
+      if (!isSkipped(child, state.options)) children.push(child);
+    }
+    // Anchored after the parent so they queue right behind it.
+    return children.length ? [{ ...page }, ...children] : [];
   }
 
   /* ------------------------------ navigation ------------------------------ */
@@ -258,9 +403,9 @@
     return `${h1}|${mainText().slice(0, 400)}`;
   }
 
-  function findSidebarLink(path) {
-    for (const anchor of document.querySelectorAll(MENU_LINK)) {
-      if (pathOf(anchor.getAttribute('href')) === path) return anchor;
+  function findSidebarHead(path) {
+    for (const head of document.querySelectorAll(`${SIDEBAR} ${MENU_HEAD.split(', ').join(`, ${SIDEBAR} `)}`)) {
+      if (headPath(head) === path) return head;
     }
     return null;
   }
@@ -271,23 +416,27 @@
     if (currentPath() === path) return { ok: true, moved: false };
     const before = fingerprint();
 
-    const link = findSidebarLink(path);
-    if (link) {
-      link.click();
-      if (await waitFor(() => currentPath() === path, { timeout: 5000, interval: 80 })) return { ok: true, moved: true };
+    // Links navigate; a collapsible button may navigate as it expands, but
+    // clicking an open one would only collapse it.
+    const head = findSidebarHead(path);
+    if (head && (head.tagName === 'A' || head.getAttribute('aria-expanded') === 'false')) {
+      head.click();
+      if (await waitFor(() => currentPath() === path, { timeout: head.tagName === 'A' ? 5000 : 2000, interval: 80 })) return { ok: true, moved: true };
     }
 
     // The link is inside a collapsed group: ask the SPA router directly.
     try {
       history.pushState({}, '', path);
       dispatchEvent(new PopStateEvent('popstate', { state: {} }));
-      const changed = await waitFor(() => currentPath() === path && fingerprint() !== before, { timeout: 5000, interval: 100 });
+      const changed = await waitFor(() => fingerprint() !== before, { timeout: 5000, interval: 100 });
       if (changed) return { ok: true, moved: true };
     } catch {
       /* fall through to a real navigation */
     }
 
     log(`Full reload for ${path}`);
+    const state = await getState();
+    if (state?.running) await setState({ ...state, reloadTarget: path });
     location.assign(location.origin + path);
     await sleep(15000);
     return { ok: false, moved: true };
@@ -487,8 +636,7 @@
 
       if (!state.queue?.length) {
         log('Expanding sidebar…');
-        await expandSidebar();
-        const discovered = collectSidebarPages().filter((p) => !isSkipped(p, options));
+        const discovered = (await discoverSidebar()).filter((p) => !isSkipped(p, options));
         if (!discovered.length) {
           log('No sidebar links found — is this the learning hub?');
           await setState({ ...state, running: false, error: 'No sidebar links found' });
@@ -499,7 +647,8 @@
         state.index = 0;
         planAll(state);
         await setState(state);
-        log(`Found ${discovered.length} pages in the sidebar; hidden children are picked up as their parents are visited.`);
+        const parents = discovered.filter((p) => p.isParent).length;
+        log(`Found ${discovered.length} pages in the sidebar (${parents} with sub-pages); hidden children are picked up as their parents are visited.`);
       }
 
       while (state.running && state.index < state.queue.length) {
@@ -523,14 +672,35 @@
           section: page.section,
         });
 
+        // Back from a full reload that landed somewhere else: the page
+        // redirects (typically a parent with no page of its own).
+        const reloaded = state.reloadTarget === page.path;
+        if (state.reloadTarget) {
+          delete state.reloadTarget;
+          await setState(state);
+        }
+
         const before = fingerprint();
-        const nav = await navigateTo(page.path);
+        const nav = reloaded ? { ok: true, moved: false } : await navigateTo(page.path);
         if (!nav.ok) return; // full reload in flight; resumes on load
         if (nav.moved) await waitFor(() => fingerprint() !== before, { timeout: 6000, interval: 100 });
         await waitFor(() => mainText().length > 20, { timeout: 10000, interval: 120 });
         await settle(document.querySelector('main') || document.body, { quiet: 300, timeout: 3000 });
 
-        const added = mergeDiscovered(state);
+        // Some parents have no page of their own and redirect (often to their
+        // first child); their sub-pages are still queued and exported.
+        const landed = currentPath();
+        if (landed !== page.path) {
+          log(`${page.path} redirects to ${landed}; skipping it, sub-pages are exported separately.`);
+          page.error = 'redirect';
+          const added = await mergeDiscovered(state, page);
+          if (added) log(`Discovered ${added} more page(s) under "${page.title}".`);
+          state.index++;
+          await setState(state);
+          continue;
+        }
+
+        const added = await mergeDiscovered(state, page);
         if (added) log(`Discovered ${added} more page(s) under "${page.title}".`);
         planFile(page, state);
         const pathToFile = new Map(state.queue.map((p) => [p.path, p.file]));
@@ -689,7 +859,7 @@
 
   async function exportCurrentPage(options = {}) {
     const path = currentPath();
-    const sidebarLink = findSidebarLink(path);
+    const sidebarLink = findSidebarHead(path);
     const title = (sidebarLink && linkTitle(sidebarLink)) || clean(document.querySelector('main h1')?.textContent) || clean(document.title) || path;
     const folder = options.folder || siteName();
     const page = {
@@ -726,7 +896,7 @@
 
   // Exposed for the offline test harness in test/.
   globalThis.__buckeyeInternals = {
-    collectSidebarPages, planAll, planFile, pageTags, extractCurrentPage, expandSidebar, cleanClone,
+    collectSidebarPages, discoverSidebar, mergePages, planAll, planFile, pageTags, extractCurrentPage, cleanClone,
     cloneVisible, extractPager, writeIndexes, mergeDiscovered, isSkipped, siteName, exportCurrentPage,
   };
 

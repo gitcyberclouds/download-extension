@@ -16,9 +16,17 @@ Requires Chrome 116 or newer.
 
 Click **Export all pages**. The extension reads the sidebar, visits each page through the app's own
 navigation, waits for the content to settle, opens in-page accordions, converts `<main>` to Markdown
-and buffers it. Collapsed sidebar groups that hide their children are handled as the crawl goes:
-each time a page is opened the sidebar is re-read and newly revealed children are queued right
-after their parent. When the crawl finishes everything is packed into one `.zip` and downloaded.
+and buffers it.
+
+Collapsible sidebar entries (e.g. *Tasking Guide*, *Reviewing Guide*, *Example tasks*, *Getting
+help* — buttons with a chevron and no link of their own) are expanded before the crawl starts, one
+at a time, and the sidebar is re-read after each click, so accordions that close one group when
+another opens still yield every child. Nested collapsibles are expanded too. The pages found are
+queued right after their parent and filed in a folder named after it. As a fallback, children that
+the sidebar renders outside their parent are nested by URL (`/getting-help/slack` goes under
+*Getting help*), and on a parent page, links in the page body that sit below the parent's URL are
+queued as its children. A parent whose own URL redirects elsewhere gets no file, but its folder
+and sub-pages are still exported. When the crawl finishes everything is packed into one `.zip` and downloaded.
 Progress and a log appear in the popup; **Stop** halts after the current page, and re-running
 resumes from where it left off.
 
@@ -44,6 +52,22 @@ Folders and files carry the sidebar tag names verbatim (emoji included). A page 
 lives inside its own folder next to them; a leaf page is a single `.md` in its parent's folder.
 
 ```
+Project Condor/
+  Overview.md
+  Glossary.md
+  Tasking Guide/
+    Tasking Guide.md
+    Before you start.md
+    Step by step/              ← nested collapsible
+      Step by step.md
+      Step 1： Read the prompt.md
+  Reviewing Guide/
+    Reviewing Guide.md
+    …
+  Getting help/
+    Getting help.md
+    …
+
 Project Violet Instructions/
   Welcome.md
   📣 Bulletin Board.md
@@ -94,13 +118,16 @@ fails, each file is downloaded individually so an export is never lost.
 
 The converter and export pipeline can be exercised offline against a saved copy of a hub page —
 either a Chrome "Webpage, Single File" `.mhtml` snapshot or a plain `.html` save placed in the
-repository root (`Project Violet Instructions.mhtml` or `Project Buckeye — Fellow Instructions.html`):
+repository root (`Project Violet Instructions.mhtml`, `Project Buckeye — Fellow Instructions.html`,
+or any other `.mhtml`; `FIXTURE=/path/to/page.mhtml` picks one explicitly). Snapshots are
+git-ignored because they hold hub content.
 
 ```bash
 npm install jsdom
 cd extension/test
 node converter.test.mjs   # sidebar parsing + converter unit cases + full page
 node export.test.mjs      # file plan (tag folders, numbered variant) + full document
+node sidebar.test.mjs     # collapsible sections expanded into nested folders (asserts)
 node zip.test.mjs         # writes out.zip
 node package.test.mjs     # whole pipeline -> package.zip
 ```

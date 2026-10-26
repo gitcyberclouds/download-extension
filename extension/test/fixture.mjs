@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { JSDOM } from 'jsdom';
+import { JSDOM, VirtualConsole } from 'jsdom';
 
 const CANDIDATES = ['Project Violet Instructions.mhtml', 'Project Buckeye — Fellow Instructions.html'];
 
@@ -23,9 +23,17 @@ function decodeQuotedPrintable(body) {
   return Buffer.from(bytes).toString('utf8');
 }
 
+// FIXTURE=/path/to/page.mhtml picks a specific snapshot; otherwise the known
+// names are tried, then any .mhtml in the repository root.
+function fixtureFiles(root) {
+  if (process.env.FIXTURE) return [path.resolve(process.env.FIXTURE)];
+  const others = fs.readdirSync(root).filter((n) => n.endsWith('.mhtml') && !CANDIDATES.includes(n)).sort();
+  return [...CANDIDATES, ...others].map((name) => path.join(root, name));
+}
+
 export function loadFixture(root = path.resolve('../..')) {
-  for (const name of CANDIDATES) {
-    const file = path.join(root, name);
+  for (const file of fixtureFiles(root)) {
+    const name = path.basename(file);
     if (!fs.existsSync(file)) continue;
 
     if (file.endsWith('.mhtml')) {
@@ -48,12 +56,18 @@ export function loadFixture(root = path.resolve('../..')) {
       restoreListItems: false,
     };
   }
-  throw new Error(`No fixture found in ${root} (expected one of: ${CANDIDATES.join(', ')})`);
+  throw new Error(`No fixture found in ${root} (expected one of: ${CANDIDATES.join(', ')}, any .mhtml, or FIXTURE=path)`);
 }
 
 export function createDom() {
   const fixture = loadFixture();
-  const dom = new JSDOM(fixture.html, { url: fixture.url, pretendToBeVisual: true });
+  // jsdom cannot navigate; its notice about that is noise for these tests.
+  const virtualConsole = new VirtualConsole();
+  virtualConsole.on('error', (e) => console.error(e));
+  virtualConsole.on('jsdomError', (e) => {
+    if (!/navigation to another Document/.test(e.message)) console.error(e.message);
+  });
+  const dom = new JSDOM(fixture.html, { url: fixture.url, pretendToBeVisual: true, virtualConsole });
   const { document } = dom.window;
   if (fixture.restoreListItems) {
     for (const el of [...document.querySelectorAll('div[data-tag="li"]')]) {

@@ -24,8 +24,10 @@ console.log('slug check:', slug('🎙️ Live Sessions Master Calendar'));
 console.log('relativePath check:', relativePath('P/A/x.md', 'P/B/C/y.md'));
 
 /* ---- 2. extraction of the current page ---- */
+const state = { folder: api.siteName(), options: {}, queue: pages, index: 0 };
+api.planAll(state);
 const page = pages.find((p) => p.path === window.location.pathname.replace(/\/+$/, '') || p.path === '/') || pages[0];
-const doc = await api.extractCurrentPage(page, new Map(pages.map((p) => [p.path, `${p.title}.md`])), {});
+const doc = await api.extractCurrentPage(page, new Map(pages.map((p) => [p.path, p.file])), {});
 console.log('\n--- markdown output ---');
 console.log(doc.markdown);
 console.log('--- pager:', doc.pager, 'features/tags:', doc.tags);
