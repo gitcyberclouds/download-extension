@@ -499,6 +499,222 @@
     }
   }
 
+  /* --------------------- popups and multi-view widgets --------------------- */
+
+  // "Read announcement"-style buttons open their text in a dialog, expand it
+  // in place or route to it. Each is clicked and whatever it reveals is
+  // captured, to be spliced into the export where the button was.
+  const POPUP_TRIGGER = /\bread\b.*\b(announcement|update|post|more|full)\b|\b(view|open|show|expand)\b.*\bannouncement\b/i;
+  const DIALOG = '[role="dialog"], [role="alertdialog"], dialog[open]';
+  const CLOSE_LABEL = /^(close|dismiss|done|got it|ok)\b/i;
+  const visibleText = (el) => clean(el?.innerText ?? el?.textContent);
+
+  function controlLabel(el) {
+    const parts = [];
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const text = clean(walker.currentNode.textContent);
+      if (text) parts.push(text);
+    }
+    return parts.join(' ').replace(/(\d)\. (?=\S)/, '$1. ') || clean(el.getAttribute('aria-label'));
+  }
+
+  function openDialogs() {
+    return [...document.querySelectorAll(DIALOG)].filter((d) => d.isConnected && getComputedStyle(d).display !== 'none');
+  }
+
+  async function closeDialog(dialog) {
+    const close = [...dialog.querySelectorAll('button')].find((b) =>
+      CLOSE_LABEL.test(clean(b.getAttribute('aria-label') || b.textContent)));
+    if (close) close.click();
+    else dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+    if (!(await waitFor(() => !dialog.isConnected || getComputedStyle(dialog).display === 'none' || dialog.getAttribute('data-state') === 'closed', { timeout: 1500, interval: 60 }))) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+      await sleep(300);
+    }
+  }
+
+  // Returns Map(marker -> detached element). Triggers get data-md-popup.
+  async function openPopups(main) {
+    const captures = new Map();
+    const triggers = [...main.querySelectorAll('button, [role="button"], a')].filter((el) =>
+      POPUP_TRIGGER.test(controlLabel(el)) && !el.disabled && !el.closest('[data-md-popup]'));
+    if (triggers.length) log(`Opening ${triggers.length} "read" button(s)…`);
+
+    for (const [i, trigger] of triggers.entries()) {
+      if (!trigger.isConnected) continue;
+      const key = String(i + 1);
+      const before = new Set(openDialogs());
+      const path = currentPath();
+      const length = visibleText(main).length;
+      trigger.setAttribute('data-md-popup', key);
+      trigger.click();
+
+      const outcome = await waitFor(() => {
+        const dialog = openDialogs().find((d) => !before.has(d) && visibleText(d));
+        if (dialog) return { dialog };
+        if (currentPath() !== path) return { routed: true };
+        if (visibleText(main).length > length + 40) return { inline: true };
+        return null;
+      }, { timeout: 4000, interval: 100 });
+
+      if (outcome?.dialog) {
+        await settle(outcome.dialog, { quiet: 250, timeout: 2500 });
+        const copy = cloneVisible(outcome.dialog);
+        for (const button of copy.querySelectorAll('button')) {
+          const text = clean(button.textContent);
+          if (!/[\p{L}\p{N}]/u.test(text) || CLOSE_LABEL.test(text) || CLOSE_LABEL.test(clean(button.getAttribute('aria-label')))) button.remove();
+        }
+        captures.set(key, copy);
+        await closeDialog(outcome.dialog);
+      } else if (outcome?.routed) {
+        const target = document.querySelector('main') || document.body;
+        await waitFor(() => visibleText(target).length > 20, { timeout: 6000, interval: 100 });
+        await settle(target, { quiet: 300, timeout: 3000 });
+        captures.set(key, cloneVisible(target));
+        history.back();
+        if (!(await waitFor(() => currentPath() === path, { timeout: 5000, interval: 100 }))) {
+          log(`Could not return to ${path} after opening an announcement.`);
+          break;
+        }
+        await settle(document.querySelector('main') || document.body, { quiet: 300, timeout: 3000 });
+        main = document.querySelector('main') || document.body;
+      }
+      // Inline: the text is now part of the page and is cloned with it.
+      await sleep(80);
+    }
+    return captures;
+  }
+
+  function splicePopups(clone, captures) {
+    for (const [key, capture] of captures) {
+      const trigger = clone.querySelector(`[data-md-popup="${key}"]`);
+      const box = document.createElement('div');
+      box.setAttribute('data-md-gap', '1');
+      box.append(...capture.childNodes);
+      if (trigger) trigger.replaceWith(box);
+      else clone.append(box);
+    }
+    for (const el of clone.querySelectorAll('[data-md-popup]')) el.removeAttribute('data-md-popup');
+  }
+
+  // Tabs, steppers and slide carousels show one view at a time. Each is a
+  // group of controls (tabs / step buttons / dots) inside a widget element.
+  function findWidgets(scope) {
+    const groups = new Set();
+    for (const list of scope.querySelectorAll('[role="tablist"]')) groups.add(list);
+    for (const current of scope.querySelectorAll('button[aria-current]:not([aria-current="false"]), [role="button"][aria-current]:not([aria-current="false"])')) {
+      const group = current.closest(GROUP_LIKE);
+      if (group && scope.contains(group)) groups.add(group);
+    }
+
+    const widgets = [];
+    for (const group of groups) {
+      const controls = [...group.querySelectorAll(group.matches('[role="tablist"]') ? '[role="tab"]' : 'button, [role="button"]')]
+        .filter((c) => !c.closest('[aria-hidden="true"]'));
+      if (controls.length < 2) continue;
+      const groupText = visibleText(group).length;
+      let element = group.parentElement;
+      while (element && element !== scope && visibleText(element).length - groupText < 40) element = element.parentElement;
+      if (!element || element === scope && visibleText(element).length - groupText < 40) continue;
+      widgets.push({ group, controls, element });
+    }
+    // Outermost first; nested widgets are expanded inside each view.
+    return widgets.filter((w) => !widgets.some((o) => o !== w && o.element !== w.element && o.element.contains(w.element)))
+      .filter((w, i, all) => all.findIndex((o) => o.element === w.element) === i);
+  }
+
+  const GROUP_LIKE = '[role="tablist"], ol, ul, [role="group"], [role="list"], [role="radiogroup"], nav';
+  const signature = (el) => `${visibleText(el)}|${[...el.querySelectorAll('img[src], video[src], source[src]')].map((m) => m.getAttribute('src')).join(',')}`;
+  const isActive = (c) => ['true', 'step', 'page', 'location'].includes(c.getAttribute('aria-current')) || c.getAttribute('aria-selected') === 'true' || c.getAttribute('data-state') === 'active';
+
+  // Clicks through every view of a widget. Returns the indices of the
+  // widget's children that change between views (the panel) and, per view,
+  // its label and expanded clones of those children.
+  async function captureWidget(widget, depth) {
+    const { element, controls } = widget;
+    const kids = () => [...element.children];
+    const start = Math.max(0, controls.findIndex(isActive));
+    const base = kids().map(signature);
+    const views = [];
+    const changed = new Set();
+
+    for (const control of controls) {
+      if (!control.isConnected || !element.isConnected) break;
+      if (control.disabled || control.getAttribute('aria-disabled') === 'true') continue;
+      const label = controlLabel(control);
+      const before = kids().map(signature).join('\n');
+      control.click();
+      await waitFor(() => kids().map(signature).join('\n') !== before, { timeout: 1200, interval: 60 });
+      await settle(element, { quiet: 200, timeout: 2000 });
+      const now = kids();
+      now.forEach((kid, i) => {
+        if (signature(kid) !== base[i] && !kid.contains(widget.group)) changed.add(i);
+      });
+      const parts = [];
+      for (const [i, kid] of now.entries()) if (!kid.contains(widget.group)) parts[i] = await expandedClone(kid, depth + 1);
+      views.push({ label, parts });
+    }
+
+    if (controls[start]?.isConnected) {
+      controls[start].click();
+      await settle(element, { quiet: 200, timeout: 1500 });
+    }
+    return { changed: [...changed].sort((a, b) => a - b), views };
+  }
+
+  // cloneVisible, plus every widget inside `root` written out view by view.
+  async function expandedClone(root, depth = 0) {
+    const widgets = depth < 3 ? findWidgets(root) : [];
+    const results = [];
+    for (const widget of widgets) {
+      const result = await captureWidget(widget, depth);
+      if (!result.changed.length || result.views.length < 2) continue;
+      const id = `${depth}-${results.length}`;
+      [...widget.element.children].forEach((kid, i) => {
+        if (result.changed.includes(i)) kid.setAttribute('data-md-panel', `${id}:${i}`);
+        if (kid.contains(widget.group)) kid.setAttribute('data-md-panel', `${id}:controls`);
+      });
+      results.push({ id, ...result });
+    }
+
+    const clone = cloneVisible(root);
+
+    for (const { id, changed, views } of results) {
+      const box = document.createElement('div');
+      for (const view of views) {
+        const section = document.createElement('div');
+        section.setAttribute('data-md-gap', '1');
+        const body = changed.map((i) => view.parts[i]).filter(Boolean);
+        const text = clean(body.map((b) => b.textContent).join(' '));
+        const name = view.label.replace(/^\d+\.\s*/, '');
+        if (name && !text.slice(0, name.length + 60).toLowerCase().includes(name.toLowerCase())) {
+          const title = document.createElement('p');
+          title.innerHTML = '<strong></strong>';
+          title.firstChild.textContent = view.label;
+          section.append(title);
+        }
+        section.append(...body);
+        box.append(section);
+      }
+      const first = clone.querySelector(`[data-md-panel="${id}:${changed[0]}"]`);
+      if (first) first.replaceWith(box);
+      for (const i of changed.slice(1)) clone.querySelector(`[data-md-panel="${id}:${i}"]`)?.remove();
+      // The step list itself is redundant once every view is labelled, and so
+      // is a row holding just the list, arrows and a "2 of 6" counter.
+      const controls = clone.querySelector(`[data-md-panel="${id}:controls"]`);
+      if (controls) {
+        const group = controls.matches(GROUP_LIKE) ? controls : controls.querySelector(GROUP_LIKE);
+        const rest = clean(controls.textContent).length - clean(group?.textContent).length;
+        if (rest < 40) controls.remove();
+        else group?.remove();
+      }
+    }
+    for (const el of root.querySelectorAll('[data-md-panel]')) el.removeAttribute('data-md-panel');
+    for (const el of clone.querySelectorAll('[data-md-panel]')) el.removeAttribute('data-md-panel');
+    return clone;
+  }
+
   const PAGER_WORD = /^(previous|prev|next|back|forward)$/i;
   const PAGER_WORDS_G = /(previous|prev|next|back|forward)/gi;
   const PAGER_LABEL = /^(previous|prev|next)\b\s*:?\s*/i;
@@ -594,7 +810,12 @@
     await expandInPageSections(main);
     await settle(main, { quiet: 300, timeout: 3000 });
 
-    const clone = cloneVisible(main);
+    const popups = options.openPopups === false ? new Map() : await openPopups(main);
+    const live = document.querySelector('main') || document.body; // a routed popup may re-render it
+    if (popups.size) await expandInPageSections(live);
+    const clone = options.expandWidgets === false ? cloneVisible(live) : await expandedClone(live);
+    splicePopups(clone, popups);
+    for (const el of live.querySelectorAll('[data-md-popup]')) el.removeAttribute('data-md-popup');
     const pager = extractPager(clone);
     cleanClone(clone);
 
@@ -897,7 +1118,7 @@
   // Exposed for the offline test harness in test/.
   globalThis.__buckeyeInternals = {
     collectSidebarPages, discoverSidebar, mergePages, planAll, planFile, pageTags, extractCurrentPage, cleanClone,
-    cloneVisible, extractPager, writeIndexes, mergeDiscovered, isSkipped, siteName, exportCurrentPage,
+    cloneVisible, expandedClone, findWidgets, openPopups, extractPager, writeIndexes, mergeDiscovered, isSkipped, siteName, exportCurrentPage,
   };
 
   // Resume automatically after a full page load mid-crawl.

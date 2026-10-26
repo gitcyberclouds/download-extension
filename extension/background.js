@@ -15,6 +15,8 @@ const DEFAULT_OPTIONS = {
   indexFiles: false,
   followPager: true,
   downloadMedia: false,
+  openPopups: true,
+  expandWidgets: true,
   skipSections: 'Support',
   maxPages: 400,
 };

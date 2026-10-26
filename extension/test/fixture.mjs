@@ -89,6 +89,8 @@ export function createSandbox(window, extra = {}) {
     URL: window.URL,
     MutationObserver: window.MutationObserver,
     MouseEvent: window.MouseEvent,
+    KeyboardEvent: window.KeyboardEvent,
+    NodeFilter: window.NodeFilter,
     PopStateEvent: window.PopStateEvent,
     history: window.history,
     getComputedStyle: window.getComputedStyle.bind(window),

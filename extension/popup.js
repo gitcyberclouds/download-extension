@@ -4,7 +4,7 @@ const OPTIONS_KEY = 'buckeye:options';
 const els = {
   site: $('site'), folder: $('folder'), delay: $('delay'), skip: $('skip'), zip: $('zip'),
   numbered: $('numbered'), frontmatter: $('frontmatter'), index: $('index'), pager: $('pager'),
-  media: $('media'), start: $('start'), stop: $('stop'), single: $('single'), fill: $('fill'),
+  media: $('media'), popups: $('popups'), widgets: $('widgets'), start: $('start'), stop: $('stop'), single: $('single'), fill: $('fill'),
   status: $('status'), log: $('log'),
 };
 
@@ -31,6 +31,8 @@ function readOptions() {
     indexFiles: els.index.checked,
     followPager: els.pager.checked,
     downloadMedia: els.media.checked,
+    openPopups: els.popups.checked,
+    expandWidgets: els.widgets.checked,
   };
 }
 
@@ -44,6 +46,8 @@ function applyOptions(options = {}) {
   if (options.indexFiles != null) els.index.checked = options.indexFiles;
   if (options.followPager != null) els.pager.checked = options.followPager;
   if (options.downloadMedia != null) els.media.checked = options.downloadMedia;
+  if (options.openPopups != null) els.popups.checked = options.openPopups;
+  if (options.expandWidgets != null) els.widgets.checked = options.expandWidgets;
 }
 
 async function refresh() {

@@ -43,6 +43,8 @@ Options in the popup:
 | Index files | off | Also write `README.md`, `_index.json`, `_tags/` and `ALL-PAGES.md` |
 | Follow Previous/Next | on | Also captures pages missing from the sidebar (filed under `_unlisted/`) |
 | Download images and videos | off | Fetches same-origin media into `_media/` inside the ZIP |
+| Click “Read announcement” buttons | on | Opens each one and saves what it reveals in place of the button |
+| Step through tabs, steppers and slide carousels | on | Clicks every tab / step / slide dot and saves each view one after another |
 
 **This page only** downloads just the page currently open, as a single `.md`.
 
@@ -91,6 +93,22 @@ Project Violet Instructions/
 Characters Windows forbids in names (`< > : " / \ | ? *`) are replaced with look-alike characters
 so the names stay readable. Links between exported pages are rewritten to relative `.md` paths.
 
+### Hidden content inside a page
+
+Before a page is converted, everything it hides behind a click is opened:
+
+- **Accordions** (`<details>`, `aria-expanded` disclosures) are expanded.
+- **“Read announcement”** (also “Read more”, “Read full post”, “View announcement”…) buttons are
+  clicked one by one. A dialog that opens is captured and closed again, text that expands in place
+  is kept, and a button that routes to another URL is captured and followed by *Back*. The
+  captured text goes into the page's `.md` where the button was.
+- **Tabs, steppers and slide carousels** — a `role="tablist"`, or a list/group of buttons where
+  one carries `aria-current` (e.g. *1. Content Quality … 7. Overall, Recap*, or slide dots
+  *A1…A6*) — are clicked through view by view. The parts of the widget that change are written
+  out for every view, labelled with the control's name unless the view already starts with it;
+  widgets nested in a view (slides inside a deck tab) are expanded too. The original view is
+  re-selected afterwards.
+
 Only the page content is exported: the hero/heading block, body text, lists, tables, code, media
 references and in-page accordions. Navigation (sidebar, Previous/Next pager), tooltips, toasts and
 anything the browser is not displaying (`display: none`, `hidden`, `aria-hidden`) are dropped.
@@ -98,7 +116,7 @@ anything the browser is not displaying (`display: none`, `hidden`, `aria-hidden`
 ## Files
 
 - `content.js` — sidebar discovery (labels, nesting, collapsed parents), SPA navigation, per-page
-  extraction, file planning by tag name, optional index/tag generation
+  extraction (accordions, announcement pop-ups, tabs/steppers/carousels), file planning by tag name, optional index/tag generation
 - `lib/markdown.js` — DOM → Markdown converter (headings, lists, tables, code, quotes, media, links)
 - `lib/zip.js` — dependency-free ZIP writer (deflate via `CompressionStream`, CRC32, UTF-8 names)
 - `lib/dom-utils.js` — waiting/settling helpers, safe file names, path maths
@@ -128,6 +146,7 @@ cd extension/test
 node converter.test.mjs   # sidebar parsing + converter unit cases + full page
 node export.test.mjs      # file plan (tag folders, numbered variant) + full document
 node sidebar.test.mjs     # collapsible sections expanded into nested folders (asserts)
+node widgets.test.mjs     # stepper, tabs, slide dots and announcement dialog captured (asserts)
 node zip.test.mjs         # writes out.zip
 node package.test.mjs     # whole pipeline -> package.zip
 ```
