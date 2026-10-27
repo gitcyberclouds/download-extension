@@ -43,8 +43,12 @@ export function hasFixture(page, root = path.resolve('../..')) {
   return fixtureFiles(root, page).length > 0;
 }
 
-export function loadFixture(root = path.resolve('../..'), page = null) {
-  for (const file of fixtureFiles(root, page)) {
+export function fixturesFor(page, root = path.resolve('../..')) {
+  return fixtureFiles(root, page);
+}
+
+export function loadFixture(root = path.resolve('../..'), page = null, only = null) {
+  for (const file of only ? [only] : fixtureFiles(root, page)) {
     const name = path.basename(file);
     if (!fs.existsSync(file)) continue;
 
@@ -71,8 +75,8 @@ export function loadFixture(root = path.resolve('../..'), page = null) {
   throw new Error(`No fixture found in ${root} (expected one of: ${CANDIDATES.join(', ')}, any .mhtml, or FIXTURE=path)`);
 }
 
-export function createDom({ page = null } = {}) {
-  const fixture = loadFixture(path.resolve('../..'), page);
+export function createDom({ page = null, file = null } = {}) {
+  const fixture = loadFixture(path.resolve('../..'), page, file);
   // jsdom cannot navigate; its notice about that is noise for these tests.
   const virtualConsole = new VirtualConsole();
   virtualConsole.on('error', (e) => console.error(e));

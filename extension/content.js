@@ -502,10 +502,11 @@
       && !openedTriggers.has(el) && !el.closest('[data-md-popup]');
   }
 
-  async function openAccordions(root, depth) {
+  async function openAccordions(root, depth, skip = []) {
     const captures = new Map();
     for (let pass = 0; pass < 4; pass++) {
-      const triggers = [...root.querySelectorAll(ACCORDION_TRIGGER)].filter(isAccordionTrigger);
+      const triggers = [...root.querySelectorAll(ACCORDION_TRIGGER)]
+        .filter((t) => isAccordionTrigger(t) && !skip.some((el) => el.contains(t)));
       if (!triggers.length) break;
 
       for (const trigger of triggers) {
@@ -652,16 +653,30 @@
       const group = current.closest(GROUP_LIKE);
       if (group && scope.contains(group)) groups.add(group);
     }
+    // Segmented buttons: a row of aria-pressed toggles, exactly one pressed
+    // ("Task & sources | File problems | Scoring exceptions").
+    for (const pressed of scope.querySelectorAll('button[aria-pressed="true"], [role="button"][aria-pressed="true"]')) {
+      const group = pressed.parentElement;
+      const toggles = group ? [...group.children].filter((c) => c.hasAttribute('aria-pressed')) : [];
+      if (toggles.length > 1 && toggles.filter((c) => c.getAttribute('aria-pressed') === 'true').length === 1) groups.add(group);
+    }
     // A <select> that swaps the content next to it ("Related example").
+    // Filters ("All formats / Slides / Docs") already show everything on
+    // "All"; stepping through them would only repeat content.
     for (const select of scope.querySelectorAll('select:not([multiple])')) {
-      if (!select.disabled && select.options.length > 1) groups.add(select);
+      if (select.disabled || select.options.length < 2) continue;
+      if ([...select.options].some((o) => /^all\b/i.test(clean(o.textContent)) || /^all$/i.test(o.value))) continue;
+      groups.add(select);
     }
 
     const widgets = [];
     for (const group of groups) {
+      const pressedGroup = !group.matches('[role="tablist"], select') && group.querySelector(':scope > [aria-pressed]');
       const controls = group.tagName === 'SELECT'
         ? [...group.options].filter((o) => !o.disabled)
-        : [...group.querySelectorAll(group.matches('[role="tablist"]') ? '[role="tab"]' : 'button, [role="button"]')]
+        : pressedGroup
+          ? [...group.children].filter((c) => c.hasAttribute('aria-pressed'))
+          : [...group.querySelectorAll(group.matches('[role="tablist"]') ? '[role="tab"]' : 'button, [role="button"]')]
           .filter((c) => !c.closest('[aria-hidden="true"]'));
       if (controls.length < 2) continue;
       const groupText = group.tagName === 'SELECT' ? 0 : visibleText(group).length;
@@ -688,7 +703,7 @@
     select.dispatchEvent(new Event('change', { bubbles: true }));
   }
   const signature = (el) => `${visibleText(el)}|${[...el.querySelectorAll('img[src], video[src], source[src]')].map((m) => m.getAttribute('src')).join(',')}`;
-  const isActive = (c) => c.selected || ['true', 'step', 'page', 'location'].includes(c.getAttribute('aria-current')) || c.getAttribute('aria-selected') === 'true' || c.getAttribute('data-state') === 'active';
+  const isActive = (c) => c.selected || ['true', 'step', 'page', 'location'].includes(c.getAttribute('aria-current')) || c.getAttribute('aria-selected') === 'true' || c.getAttribute('aria-pressed') === 'true' || c.getAttribute('data-state') === 'active';
 
   // Clicks through every view of a widget. Returns the indices of the
   // widget's children that change between views (the panel) and, per view,
@@ -730,7 +745,10 @@
   // The export of `root`: accordion items captured while open, then every
   // tab / step / option view of the widgets in it.
   async function richClone(root, depth = 0) {
-    const accordions = depth < 4 ? await openAccordions(root, depth) : new Map();
+    // Accordions inside a tab / step view are opened while that view shows,
+    // so they are left to the widget pass.
+    const widgetElements = widgetsEnabled && depth < 3 ? findWidgets(root).map((w) => w.element) : [];
+    const accordions = depth < 4 ? await openAccordions(root, depth, widgetElements) : new Map();
     const clone = await expandedClone(root, depth);
     for (const [key, { id, clone: item }] of accordions) {
       item.removeAttribute('data-md-acc');
@@ -849,6 +867,14 @@
   function cleanClone(clone) {
     for (const selector of NOISE_SELECTORS) {
       for (const node of clone.querySelectorAll(selector)) node.remove();
+    }
+    // A dropdown left as is (e.g. a filter) reads as its current choice, not
+    // as every option run together.
+    for (const select of clone.querySelectorAll('select')) {
+      const chosen = select.querySelector('option[selected]') || select.options[0];
+      const span = document.createElement('span');
+      span.textContent = chosen ? `: ${clean(chosen.textContent)}` : '';
+      select.replaceWith(span);
     }
     return clone;
   }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Learning Hub Exporter",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "minimum_chrome_version": "116",
   "description": "Crawls a Handshake learning hub (*.learn.joinhandshake.com) and exports every page's content as Markdown, filed in folders named after the sidebar tags.",
   "permissions": ["downloads", "storage", "unlimitedStorage", "scripting", "offscreen"],

@@ -107,12 +107,16 @@ Before a page is converted, everything it hides behind a click is opened:
   clicked one by one. A dialog that opens is captured and closed again, text that expands in place
   is kept, and a button that routes to another URL is captured and followed by *Back*. The
   captured text goes into the page's `.md` where the button was.
-- **Tabs, steppers and slide carousels** — a `role="tablist"`, or a list/group of buttons where
+- **Tabs, steppers and slide carousels** — a `role="tablist"`, a list/group of buttons where
   one carries `aria-current` (e.g. *1. Content Quality … 7. Overall, Recap*, or slide dots
-  *A1…A6*) — are clicked through view by view. The parts of the widget that change are written
+  *A1…A6*), or a row of `aria-pressed` toggles with one pressed (e.g. the *Task & sources /
+  File problems / Scoring exceptions* topics) — are clicked through view by view. The parts of the widget that change are written
   out for every view, labelled with the control's name unless the view already starts with it;
   widgets nested in a view (slides inside a deck tab) are expanded too. A `<select>` that swaps
-  the content next to it (*Related example*) is treated the same way, one option at a time. The
+  the content next to it (*Related example*) is treated the same way, one option at a time;
+  a filter that has an *All…* option (*Show questions for: All formats*) is left on it, since
+  stepping through it would only repeat content. Accordions inside a view are opened while that
+  view is showing. The
   original view is re-selected afterwards.
 
 Only the page content is exported: the hero/heading block, body text, lists, tables, code, media
@@ -143,7 +147,8 @@ fails, each file is downloaded individually so an export is never lost.
 The converter and export pipeline can be exercised offline against a saved copy of a hub page —
 either a Chrome "Webpage, Single File" `.mhtml` snapshot or a plain `.html` save placed in the
 repository root (`Project Violet Instructions.mhtml`, `Project Buckeye — Fellow Instructions.html`,
-or any other `.mhtml`; `FIXTURE=/path/to/page.mhtml` picks one explicitly; `widgets.test.mjs` and `accordion.test.mjs` look for snapshots of `/overview` and `/common-mistakes` and skip without them). Snapshots are
+or any other `.mhtml`; `FIXTURE=/path/to/page.mhtml` picks one explicitly; `widgets.test.mjs`, `accordion.test.mjs` and `tabs.test.mjs` look for snapshots of `/overview`,
+`/common-mistakes` and `/evaluation-questions` — one per topic for the last — and skip without them). Snapshots are
 git-ignored because they hold hub content.
 
 ```bash
@@ -154,6 +159,7 @@ node export.test.mjs      # file plan (tag folders, numbered variant) + full doc
 node sidebar.test.mjs     # collapsible sections expanded into nested folders (asserts)
 node widgets.test.mjs     # stepper, tabs, slide dots and announcement dialog captured (asserts)
 node accordion.test.mjs   # single-open accordion + "Related example" selects (asserts)
+node tabs.test.mjs        # aria-pressed topic buttons with accordions inside, filter untouched (asserts)
 node zip.test.mjs         # writes out.zip
 node package.test.mjs     # whole pipeline -> package.zip
 ```
